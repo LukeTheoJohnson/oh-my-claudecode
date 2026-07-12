@@ -10,7 +10,9 @@ vi.mock('fs', async (importOriginal) => {
     existsSync: vi.fn(),
     mkdirSync: vi.fn(),
     readFileSync: vi.fn(),
+    readdirSync: vi.fn(),
     rmSync: vi.fn(),
+    statSync: vi.fn(),
     symlinkSync: vi.fn(),
     lstatSync: vi.fn((target: unknown) => ({
       isDirectory: () => typeof target === 'string' && !target.endsWith('/.git'),
@@ -37,9 +39,9 @@ vi.mock('../../../providers/index.js', () => ({
   getProvider: vi.fn(),
 }));
 
-import { existsSync, readFileSync, rmSync, symlinkSync } from 'fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync } from 'fs';
 import { loadConfig } from '../../../config/loader.js';
-import { teleportCommand, teleportRemoveCommand } from '../teleport.js';
+import { teleportCommand, teleportListCommand, teleportRemoveCommand } from '../teleport.js';
 
 describe('teleportCommand', () => {
   beforeEach(async () => {
@@ -193,6 +195,50 @@ describe('teleportCommand', () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('could not read package.json'));
     expect(execFileSync).toHaveBeenCalledWith('yarn', ['install'], expect.objectContaining({ cwd: '/root/issue/repo-1' }));
   });
+
+  it('passes windowsHide: true to repository probe execSync calls', async () => {
+    await teleportCommand('#1', { worktreePath: '/root' });
+
+    expect(execSync).toHaveBeenCalledWith('git rev-parse --show-toplevel', expect.objectContaining({ windowsHide: true }));
+    expect(execSync).toHaveBeenCalledWith('git remote get-url origin', expect.objectContaining({ windowsHide: true }));
+  });
+});
+
+describe('teleportListCommand', () => {
+  const worktreeRoot = join(homedir(), 'Workspace', 'omc-worktrees');
+  const worktreePath = join(worktreeRoot, 'issue', 'repo-1');
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  it('returns empty worktrees when root directory does not exist', async () => {
+    (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(false);
+    await teleportListCommand({ json: true });
+    expect(console.log).toHaveBeenCalledWith(JSON.stringify({ worktrees: [] }));
+    expect(execSync).not.toHaveBeenCalled();
+  });
+
+  it('passes windowsHide: true to git branch --show-current when listing worktrees', async () => {
+    (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
+    (readdirSync as ReturnType<typeof vi.fn>).mockImplementation((dir: unknown) => {
+      if (dir === worktreeRoot) return [{ name: 'issue', isDirectory: () => true }];
+      if (String(dir) === join(worktreeRoot, 'issue')) return [{ name: 'repo-1', isDirectory: () => true }];
+      return [];
+    });
+    (statSync as ReturnType<typeof vi.fn>).mockImplementation((p: unknown) => ({
+      isFile: () => String(p) === join(worktreeRoot, 'issue', 'repo-1', '.git'),
+    }));
+    (execSync as ReturnType<typeof vi.fn>).mockReturnValue('feat/my-feature\n');
+
+    await teleportListCommand({ json: true });
+
+    expect(execSync).toHaveBeenCalledWith(
+      'git branch --show-current',
+      expect.objectContaining({ cwd: worktreePath, windowsHide: true }),
+    );
+  });
 });
 
 describe('teleportRemoveCommand', () => {
@@ -265,5 +311,30 @@ describe('teleportRemoveCommand', () => {
       ['worktree', 'remove', '--force', targetPath],
       expect.objectContaining({ cwd: '/repo' }),
     );
+  });
+
+  it('passes windowsHide: true to git status --porcelain and git rev-parse --git-dir', async () => {
+    (execSync as ReturnType<typeof vi.fn>).mockImplementation((command: string) => {
+      if (command === 'git status --porcelain') return '';
+      if (command === 'git rev-parse --git-dir') return '/repo/.git/worktrees/repo-3089\n';
+      return '';
+    });
+
+    await teleportRemoveCommand(targetPath, {});
+
+    expect(execSync).toHaveBeenCalledWith('git status --porcelain', expect.objectContaining({ windowsHide: true }));
+    expect(execSync).toHaveBeenCalledWith('git rev-parse --git-dir', expect.objectContaining({ windowsHide: true }));
+  });
+
+  it('passes windowsHide: true to git rev-parse --git-dir when --force skips status check', async () => {
+    (execSync as ReturnType<typeof vi.fn>).mockImplementation((command: string) => {
+      if (command === 'git rev-parse --git-dir') return '/repo/.git/worktrees/repo-3089\n';
+      return '';
+    });
+
+    await teleportRemoveCommand(targetPath, { force: true });
+
+    expect(execSync).not.toHaveBeenCalledWith('git status --porcelain', expect.anything());
+    expect(execSync).toHaveBeenCalledWith('git rev-parse --git-dir', expect.objectContaining({ windowsHide: true }));
   });
 });
