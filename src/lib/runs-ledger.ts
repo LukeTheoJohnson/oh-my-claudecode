@@ -140,9 +140,11 @@ export function observeModeStateActivation(
 }
 
 /**
- * Start of the current run for this key: the first `start` after the last
- * `end`. Rotation moves the whole main file into `.1`, so a long-running
- * run's start can live there; the archive is read first, oldest to newest.
+ * Start of the current run for this key: the most recent `start` not
+ * followed by an `end`. A run deactivated with `active:false` logs no `end`,
+ * so an older start can belong to an earlier run; the latest one never does,
+ * and a duplicate start only makes the closeout check stricter. Rotation
+ * moves the whole main file into `.1`, so the archive is read first.
  */
 function ledgerStartTs(omcRoot: string, run: string, sessionId: string | undefined): string | undefined {
   const path = ledgerPath(omcRoot);
@@ -166,7 +168,7 @@ function ledgerStartTs(omcRoot: string, run: string, sessionId: string | undefin
     if (!entry || typeof entry !== 'object') continue;
     if (entry.run !== run || entry.sessionId !== sessionId) continue;
     if (entry.event === 'end') start = undefined;
-    else if (entry.event === 'start' && start === undefined && typeof entry.ts === 'string') start = entry.ts;
+    else if (entry.event === 'start' && typeof entry.ts === 'string') start = entry.ts;
   }
   return start;
 }

@@ -142,14 +142,23 @@ describe('runs ledger', () => {
       expect(ledgerLines(dir).at(-1)).toMatchObject({ event: 'end', closeoutWritten: false });
     });
 
-    it('keeps the first start after the last end and skips malformed lines', () => {
+    it('uses the most recent start and skips malformed lines', () => {
       const dir = fixture();
       appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
       appendFileSync(join(dir, 'state', 'runs', 'ledger.jsonl'), 'not json\n');
-      appendRunLedger(dir, { ts: new Date(Date.now() - 600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
-      notepadWrittenAt(dir, 'team', new Date(Date.now() - 1800_000));
+      appendRunLedger(dir, { ts: new Date(Date.now() - 1200_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      notepadWrittenAt(dir, 'team', new Date(Date.now() - 600_000));
       observeModeStateClear(dir, statePath(dir, 'team', 's1'), { active: true });
-      expect(ledgerLines(dir).filter((line) => line.event === 'end').at(-1)).toMatchObject({ closeoutWritten: true });
+      expect(ledgerLines(dir).at(-1)).toMatchObject({ event: 'end', closeoutWritten: true });
+    });
+
+    it('does not credit a reactivated run with the closeout of the run before it', () => {
+      const dir = fixture();
+      appendRunLedger(dir, { ts: new Date(Date.now() - 7200_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      notepadWrittenAt(dir, 'team', new Date(Date.now() - 5400_000));
+      appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      observeModeStateClear(dir, statePath(dir, 'team', 's1'), { active: true });
+      expect(ledgerLines(dir).at(-1)).toMatchObject({ event: 'end', closeoutWritten: false });
     });
 
     it('shares the key across sessions on legacy paths', () => {
