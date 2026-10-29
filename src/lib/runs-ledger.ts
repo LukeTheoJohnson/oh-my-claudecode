@@ -139,23 +139,31 @@ export function observeModeStateActivation(
   }
 }
 
-/** Start of the current run for this key: the first `start` after the last `end`. */
+/**
+ * Start of the current run for this key: the first `start` after the last
+ * `end`. Rotation moves the whole main file into `.1`, so a long-running
+ * run's start can live there; the archive is read first, oldest to newest.
+ */
 function ledgerStartTs(omcRoot: string, run: string, sessionId: string | undefined): string | undefined {
-  let raw: string;
-  try {
-    raw = readFileSync(ledgerPath(omcRoot), 'utf8');
-  } catch {
-    return undefined;
+  const path = ledgerPath(omcRoot);
+  let raw = '';
+  for (const file of [`${path}.1`, path]) {
+    try {
+      raw += `${readFileSync(file, 'utf8')}\n`;
+    } catch {
+      // a missing archive or ledger contributes nothing
+    }
   }
   let start: string | undefined;
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue;
-    let entry: Partial<RunLedgerEntry>;
+    let entry: Partial<RunLedgerEntry> | null;
     try {
-      entry = JSON.parse(line) as Partial<RunLedgerEntry>;
+      entry = JSON.parse(line) as Partial<RunLedgerEntry> | null;
     } catch {
       continue;
     }
+    if (!entry || typeof entry !== 'object') continue;
     if (entry.run !== run || entry.sessionId !== sessionId) continue;
     if (entry.event === 'end') start = undefined;
     else if (entry.event === 'start' && start === undefined && typeof entry.ts === 'string') start = entry.ts;

@@ -167,5 +167,25 @@ describe('runs ledger', () => {
       observeModeStateClear(dir, statePath(dir, 'team', 's1'), { active: true });
       expect(ledgerLines(dir).at(-1)).toMatchObject({ event: 'end', closeoutWritten: false });
     });
+
+    it('finds a start that rotated into the archive', () => {
+      const dir = fixture();
+      appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      for (let i = 0; i < 1000; i += 1) {
+        appendRunLedger(dir, { ts: 't', run: 'ralph', sessionId: 'other', event: 'start', outcome: 'running' });
+      }
+      notepadWrittenAt(dir, 'team', new Date(Date.now() - 1800_000));
+      observeModeStateClear(dir, statePath(dir, 'team', 's1'), { active: true });
+      expect(ledgerLines(dir).at(-1)).toMatchObject({ run: 'team', event: 'end', closeoutWritten: true });
+    });
+
+    it('still records the end when the ledger holds a non-object record', () => {
+      const dir = fixture();
+      appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      appendFileSync(join(dir, 'state', 'runs', 'ledger.jsonl'), 'null\n');
+      notepadWrittenAt(dir, 'team', new Date(Date.now() - 1800_000));
+      observeModeStateClear(dir, statePath(dir, 'team', 's1'), { active: true });
+      expect(ledgerLines(dir).at(-1)).toMatchObject({ run: 'team', event: 'end', closeoutWritten: true });
+    });
   });
 });
