@@ -111,6 +111,59 @@ export function observeModeStateWrite(omcRoot: string, filePath: string, state: 
 }
 
 /**
+ * Observe a conditional state write: append a `start` edge when a watched
+ * mode goes from inactive (or absent) to active. The transition is the
+ * idempotency guard, so this does not consult the per-process map, which a
+ * clear in another process leaves stale.
+ */
+export function observeModeStateActivation(
+  omcRoot: string,
+  filePath: string,
+  previous: Record<string, unknown> | null | undefined,
+  next: Record<string, unknown>,
+): void {
+  try {
+    if (previous?.active === true || next?.active !== true) return;
+    const mode = modeFromStatePath(filePath);
+    if (!mode || !isWatchedRunMode(mode)) return;
+    activeLoggedPaths.set(filePath, true);
+    appendRunLedger(omcRoot, {
+      ts: new Date().toISOString(),
+      run: mode,
+      sessionId: sessionIdFromStatePath(filePath),
+      event: 'start',
+      outcome: 'running',
+    });
+  } catch {
+    // evidence by contract
+  }
+}
+
+/** Start of the current run for this key: the first `start` after the last `end`. */
+function ledgerStartTs(omcRoot: string, run: string, sessionId: string | undefined): string | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(ledgerPath(omcRoot), 'utf8');
+  } catch {
+    return undefined;
+  }
+  let start: string | undefined;
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    let entry: Partial<RunLedgerEntry>;
+    try {
+      entry = JSON.parse(line) as Partial<RunLedgerEntry>;
+    } catch {
+      continue;
+    }
+    if (entry.run !== run || entry.sessionId !== sessionId) continue;
+    if (entry.event === 'end') start = undefined;
+    else if (entry.event === 'start' && start === undefined && typeof entry.ts === 'string') start = entry.ts;
+  }
+  return start;
+}
+
+/**
  * Observe a successful state clear: append an `end` edge when a watched
  * mode's previously-active state is removed, carrying the outcome and the
  * closeout flag computed against the run's notepad.
@@ -121,15 +174,19 @@ export function observeModeStateClear(omcRoot: string, filePath: string, previou
     if (!mode || !isWatchedRunMode(mode)) return;
     if (!previousState || previousState.active !== true) return;
     if (previousState.active === true) activeLoggedPaths.delete(filePath);
+    const sessionId = sessionIdFromStatePath(filePath);
+    const startedAt = typeof previousState.started_at === 'string' && Number.isFinite(Date.parse(previousState.started_at))
+      ? previousState.started_at
+      : ledgerStartTs(omcRoot, mode, sessionId);
     appendRunLedger(omcRoot, {
       ts: new Date().toISOString(),
       run: mode,
-      sessionId: sessionIdFromStatePath(filePath),
+      sessionId,
       event: 'end',
       outcome: typeof previousState.current_phase === 'string' && /complete|done/i.test(previousState.current_phase)
         ? 'completed'
         : 'cancelled',
-      closeoutWritten: closeoutWrittenFor(omcRoot, mode, typeof previousState.started_at === 'string' ? previousState.started_at : undefined),
+      closeoutWritten: closeoutWrittenFor(omcRoot, mode, startedAt),
     });
   } catch {
     // evidence by contract

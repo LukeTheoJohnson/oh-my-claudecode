@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -30,7 +30,13 @@ function statePath(dir: string, mode = 'ralph', sessionId?: string): string {
 function ledgerLines(dir: string): Array<Record<string, unknown>> {
   const path = join(dir, 'state', 'runs', 'ledger.jsonl');
   if (!existsSyncSafe(path)) return [];
-  return readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  return readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).flatMap((line) => {
+    try {
+      return [JSON.parse(line)];
+    } catch {
+      return [];
+    }
+  });
 }
 
 function existsSyncSafe(path: string): boolean {
@@ -109,5 +115,57 @@ describe('runs ledger', () => {
     const dir = fixture();
     expect(closeoutWrittenFor(dir, 'ralph', undefined)).toBe(false);
     expect(closeoutWrittenFor(dir, 'ralph', 'not-a-date')).toBe(false);
+  });
+
+  describe('start-time fallback when started_at is missing', () => {
+    function notepadWrittenAt(dir: string, mode: string, at: Date): void {
+      const notepad = join(dir, 'notepads', mode, 'problems.md');
+      mkdirSync(join(notepad, '..'), { recursive: true });
+      writeFileSync(notepad, '- closeout line\n');
+      utimesSync(notepad, at, at);
+    }
+
+    it('uses the ledger start of the same run and session', () => {
+      const dir = fixture();
+      appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      notepadWrittenAt(dir, 'team', new Date(Date.now() - 1800_000));
+      observeModeStateClear(dir, statePath(dir, 'team', 's1'), { active: true });
+      expect(ledgerLines(dir).at(-1)).toMatchObject({ run: 'team', sessionId: 's1', event: 'end', closeoutWritten: true });
+    });
+
+    it('does not borrow the start of an earlier run that already ended', () => {
+      const dir = fixture();
+      appendRunLedger(dir, { ts: new Date(Date.now() - 7200_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      notepadWrittenAt(dir, 'team', new Date(Date.now() - 5400_000));
+      appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', sessionId: 's1', event: 'end', outcome: 'cancelled', closeoutWritten: true });
+      observeModeStateClear(dir, statePath(dir, 'team', 's1'), { active: true });
+      expect(ledgerLines(dir).at(-1)).toMatchObject({ event: 'end', closeoutWritten: false });
+    });
+
+    it('keeps the first start after the last end and skips malformed lines', () => {
+      const dir = fixture();
+      appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      appendFileSync(join(dir, 'state', 'runs', 'ledger.jsonl'), 'not json\n');
+      appendRunLedger(dir, { ts: new Date(Date.now() - 600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      notepadWrittenAt(dir, 'team', new Date(Date.now() - 1800_000));
+      observeModeStateClear(dir, statePath(dir, 'team', 's1'), { active: true });
+      expect(ledgerLines(dir).filter((line) => line.event === 'end').at(-1)).toMatchObject({ closeoutWritten: true });
+    });
+
+    it('shares the key across sessions on legacy paths', () => {
+      const dir = fixture();
+      appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', event: 'start', outcome: 'running' });
+      notepadWrittenAt(dir, 'team', new Date(Date.now() - 1800_000));
+      observeModeStateClear(dir, statePath(dir, 'team'), { active: true });
+      expect(ledgerLines(dir).at(-1)).toMatchObject({ event: 'end', closeoutWritten: true });
+    });
+
+    it('still reports a run with a start but no closeout', () => {
+      const dir = fixture();
+      notepadWrittenAt(dir, 'team', new Date(Date.now() - 7200_000));
+      appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
+      observeModeStateClear(dir, statePath(dir, 'team', 's1'), { active: true });
+      expect(ledgerLines(dir).at(-1)).toMatchObject({ event: 'end', closeoutWritten: false });
+    });
   });
 });
