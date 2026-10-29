@@ -185,9 +185,10 @@ export function observeModeStateClear(omcRoot: string, filePath: string, previou
     if (!previousState || previousState.active !== true) return;
     if (previousState.active === true) activeLoggedPaths.delete(filePath);
     const sessionId = sessionIdFromStatePath(filePath);
-    const startedAt = typeof previousState.started_at === 'string' && Number.isFinite(Date.parse(previousState.started_at))
-      ? previousState.started_at
-      : ledgerStartTs(omcRoot, mode, sessionId);
+    // A resume keeps the original started_at, so the later ledger start wins.
+    const candidates = [previousState.started_at, ledgerStartTs(omcRoot, mode, sessionId)]
+      .filter((ts): ts is string => typeof ts === 'string' && Number.isFinite(Date.parse(ts)));
+    const startedAt = candidates.sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1);
     appendRunLedger(omcRoot, {
       ts: new Date().toISOString(),
       run: mode,

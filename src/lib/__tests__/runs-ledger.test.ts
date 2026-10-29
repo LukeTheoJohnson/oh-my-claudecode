@@ -177,6 +177,14 @@ describe('runs ledger', () => {
       expect(ledgerLines(dir).at(-1)).toMatchObject({ event: 'end', closeoutWritten: false });
     });
 
+    it('uses a later resume start over the original started_at', () => {
+      const dir = fixture();
+      notepadWrittenAt(dir, 'autopilot', new Date(Date.now() - 5400_000));
+      appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'autopilot', sessionId: 's1', event: 'start', outcome: 'running' });
+      observeModeStateClear(dir, statePath(dir, 'autopilot', 's1'), { active: true, started_at: new Date(Date.now() - 7200_000).toISOString() });
+      expect(ledgerLines(dir).at(-1)).toMatchObject({ run: 'autopilot', event: 'end', closeoutWritten: false });
+    });
+
     it('finds a start that rotated into the archive', () => {
       const dir = fixture();
       appendRunLedger(dir, { ts: new Date(Date.now() - 3600_000).toISOString(), run: 'team', sessionId: 's1', event: 'start', outcome: 'running' });
