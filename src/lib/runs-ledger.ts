@@ -140,40 +140,6 @@ export function observeModeStateActivation(
 }
 
 /**
- * Start of the current run for this key: the most recent `start` not
- * followed by an `end`. A run deactivated with `active:false` logs no `end`,
- * so an older start can belong to an earlier run; the latest one never does,
- * and a duplicate start only makes the closeout check stricter. Rotation
- * moves the whole main file into `.1`, so the archive is read first.
- */
-function ledgerStartTs(omcRoot: string, run: string, sessionId: string | undefined): string | undefined {
-  const path = ledgerPath(omcRoot);
-  let raw = '';
-  for (const file of [`${path}.1`, path]) {
-    try {
-      raw += `${readFileSync(file, 'utf8')}\n`;
-    } catch {
-      // a missing archive or ledger contributes nothing
-    }
-  }
-  let start: string | undefined;
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    let entry: Partial<RunLedgerEntry> | null;
-    try {
-      entry = JSON.parse(line) as Partial<RunLedgerEntry> | null;
-    } catch {
-      continue;
-    }
-    if (!entry || typeof entry !== 'object') continue;
-    if (entry.run !== run || entry.sessionId !== sessionId) continue;
-    if (entry.event === 'end') start = undefined;
-    else if (entry.event === 'start' && typeof entry.ts === 'string') start = entry.ts;
-  }
-  return start;
-}
-
-/**
  * Observe a successful state clear: append an `end` edge when a watched
  * mode's previously-active state is removed, carrying the outcome and the
  * closeout flag computed against the run's notepad.
@@ -184,20 +150,15 @@ export function observeModeStateClear(omcRoot: string, filePath: string, previou
     if (!mode || !isWatchedRunMode(mode)) return;
     if (!previousState || previousState.active !== true) return;
     if (previousState.active === true) activeLoggedPaths.delete(filePath);
-    const sessionId = sessionIdFromStatePath(filePath);
-    // A resume keeps the original started_at, so the later ledger start wins.
-    const candidates = [previousState.started_at, ledgerStartTs(omcRoot, mode, sessionId)]
-      .filter((ts): ts is string => typeof ts === 'string' && Number.isFinite(Date.parse(ts)));
-    const startedAt = candidates.sort((a, b) => Date.parse(a) - Date.parse(b)).at(-1);
     appendRunLedger(omcRoot, {
       ts: new Date().toISOString(),
       run: mode,
-      sessionId,
+      sessionId: sessionIdFromStatePath(filePath),
       event: 'end',
       outcome: typeof previousState.current_phase === 'string' && /complete|done/i.test(previousState.current_phase)
         ? 'completed'
         : 'cancelled',
-      closeoutWritten: closeoutWrittenFor(omcRoot, mode, startedAt),
+      closeoutWritten: closeoutWrittenFor(omcRoot, mode, typeof previousState.started_at === 'string' ? previousState.started_at : undefined),
     });
   } catch {
     // evidence by contract
